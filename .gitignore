@@ -1,6 +1,5 @@
 .DS_Store
 __pycache__/
-.vscode
 docx_output_folder/*
 json_output_folder/*
 pdf_input_folder/*

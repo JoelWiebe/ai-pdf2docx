@@ -1,0 +1,44 @@
+// File: .vscode/launch.json
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "AI-PDF2DOCX: PDF to JSON",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/ai-pdf2docx.py", // Path to your wrapper script
+            "console": "integratedTerminal",
+            "args": [
+                "pdf2json",
+                // --- REQUIRED ARGUMENTS for pdf2json ---
+                // Replace with actual paths
+                "./pdf_input_folder",      // input_pdf_directory
+                "./json_output_folder",     // output_json_directory
+                "--project_id", "ai-data-extractor",
+                // --- OPTIONAL ARGUMENTS for pdf2json ---
+                "--location", "global",
+                "--model", "gemini-2.5-pro-preview-05-06",
+                "--delay", "1", // e.g., 1 second delay
+                // "--overwrite" // Uncomment to enable overwrite
+            ],
+            "justMyCode": true
+        },
+        {
+            "name": "AI-PDF2DOCX: JSON to DOCX",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/ai-pdf2docx.py", // Path to your wrapper script
+            "console": "integratedTerminal",
+            "args": [
+                "json2docx",
+                // --- REQUIRED ARGUMENTS for json2docx ---
+                // Replace with actual paths
+                "./json_output_folder",     // input_json_directory
+                "./docx_output_folder",     // output_docx_directory
+                // --- OPTIONAL ARGUMENTS for json2docx ---
+                "--overwrite" // Uncomment to enable overwrite
+            ],
+            "justMyCode": true
+        }
+    ]
+}
