@@ -134,36 +134,74 @@ This workspace includes a `.vscode/launch.json` file with pre-configured launch 
 * **JSON Output (Phase 1):** The script saves the raw text output from the Gemini model as a `.json` file. While the prompt strongly requests valid JSON, there's a small chance the model might produce slightly malformed JSON for highly complex or unusual inputs. Phase 2 will report errors if it cannot parse a JSON file. You may need to manually inspect and correct such files.
 * **Table Conversion:** Tables are extracted as Markdown and then converted to DOCX tables. Very complex tables (e.g., with merged cells or highly irregular structures) might not be rendered perfectly.
 
-## Error Handling and Resuming Processing
+## Error Handling and Resuming Processing (`ai-pdf2docx`)
 
-The script is designed to save any successfully processed data before exiting due to an unrecoverable error (like repeated API failures or critical issues with a specific document). The output Excel file will be named with a suffix like `_ERROR_INCOMPLETE` or `_USER_INTERRUPTED_PARTIAL` in such cases.
+The `ai-pdf2docx` tool processes documents in two main phases: `pdf2json` (converting PDF to a structured JSON representation via an LLM) and `json2docx` (converting the JSON to a DOCX file). Errors can occur in either phase.
 
-If an error occurs and the script halts:
+The script (especially if using an `ai-pdf2docx.py` wrapper script with subcommands for `pdf2json` and `json2docx`) is generally designed to process files in a batch. If an error occurs with a specific file, it may skip that file and continue with others, or halt depending on the severity and the script's error handling for fatal issues. The console output logs are your primary guide for identifying problematic files.
 
-1.  **Identify Processed Files:**
-    * Open the partially saved Excel workbook (e.g., `extracted_data_..._ERROR_INCOMPLETE.xlsx`).
-    * Note the unique filenames listed in the "filename" column. These documents were successfully processed (at least up to the point of extraction for the variables listed).
-    * Move these corresponding `.docx` files from your `input_docs` directory to a new, separate subfolder (e.g., `input_docs/Completed/`).
+Here are some common errors and how to address them:
 
-2.  **Identify the Problematic File:**
-    * The console output when the script halted will typically indicate the last file it was attempting to process when the error occurred (e.g., `Processing was halted due to an error: File: problematic_document.docx, Critical Error: ...`).
-    * Move this specific problematic `.docx` file from `input_docs` to a different new subfolder (e.g., `input_docs/Pending_Review/`).
+### 1. Errors During Phase 1 (`pdf2json` - PDF to JSON Conversion)
 
-3.  **Resume Processing Remaining Files:**
-    * Run the `ai_data_extractor.py` script again. Since the successfully processed files and the identified problematic file have been moved out of the `input_docs` directory, the script will continue with the remaining unprocessed DOCX files.
+This phase involves the LLM (e.g., Gemini) parsing the PDF and generating a structured JSON output.
 
-4.  **Address Problematic Files:**
-    * Once all other files are successfully processed (and their DOCX files also moved to your `input_docs/Completed/` folder), you can focus on the file(s) in `input_docs/Pending_Review/`.
-    * Move one problematic file at a time back into the main `input_docs` directory.
-    * Try running the script again, focusing on this single file.
-    * **Troubleshooting:**
-        * Check the console output for specific error messages related to this file.
-        * Consider if the `MAX_TOKENS` limit was hit (see "API Rate Limits & Errors" section above). You might need to adjust `max_output_tokens` in `config.py` temporarily or consider if the document section is exceptionally large for the classification/extraction task.
-        * Examine the DOCX file itself for any unusual formatting or potential corruption.
-        * If the issue seems to be with how the LLM is responding (e.g., consistently malformed JSON, incorrect labels despite clear prompts), you might need to debug the prompt engineering for that specific type of content or report the issue if it seems like a bug in the script's logic.
-        * You can also reduce `MAX_INVALID_LABEL_WARNINGS_PER_DOC` in `config.py` to a low number (like 0 or 1) to make the script stop more quickly if the issue is related to the "Classified label '...' is not a predefined paragraph tag" warnings, helping you pinpoint which section is causing the model to respond unexpectedly.
+**Error Example:**
+"Error calling Gemini API… Resource exhausted. Please try again later. Please refer to https://cloud.google.com/vertex-ai/generative-ai/docs/error-code-429 for more details… Failed to get structured data for ./pdf_input_folder/your_document_name.pdf. Skipping JSON file creation."
+```
+**Possible Causes and Solutions:**
 
-By following these steps, you can manage errors, ensure already processed data is saved, and systematically work through a large batch of documents.
+* **PDF Complexity or Issues:**
+    * Very complex PDFs (e.g., intricate layouts, scanned documents requiring high-quality OCR by the LLM, non-standard fonts, heavy vector graphics) or PDFs with issues like corrupted embedded elements or security restrictions can sometimes cause the LLM to struggle or take a very long time. This might lead to timeouts or other API errors.
+    * **Solutions:**
+        * **Try obtaining a cleaner, more standard, or text-based version of the PDF if possible.**
+        * For scanned PDFs, ensure they are of high quality if the LLM is expected to perform OCR.
+        * If a specific PDF consistently fails, move it to a separate folder (e.g., `input_docs/pdf2json_failed/`) and attempt to process it individually later, perhaps with different settings or after inspection.
+
+* **API Rate Limits / Quotas ("Resource exhausted"):**
+    * This HTTP 429 error usually means you're making too many requests to the Vertex AI API in a short period, or you've hit a specific quota limit for your project.
+    * **Solutions:**
+        * **Wait and Retry:** As the message suggests, try running the script again later.
+        * **Check Quotas:** Review your Vertex AI quotas in the Google Cloud Console to see if you are hitting any limits (e.g., requests per minute for the specific model). You may need to request an increase.
+        * **Use a `--delay` flag (if available):** If your `ai-pdf2docx.py` script processes many PDFs in a batch for the `pdf2json` command, a delay option (e.g., `--delay 1` or `--delay 2` to add a pause between processing each PDF) can help avoid requests-per-minute limits.
+        * **Reduce Concurrent Processing:** If you are running multiple instances of the script, reduce the number running simultaneously.
+
+### 2. Errors During Phase 2 (`json2docx` - JSON to DOCX Conversion)
+
+This phase reads the `.json` file (created by `pdf2json`) and uses its structure to generate a `.docx` file.
+
+**Error Example (when `json2docx` tries to load a malformed JSON):**
+"Error decoding JSON from file for ./json_input_folder/your_document_name.json: Unterminated string starting at: line 925 column 18 (char 131084)"
+
+**Possible Causes and Solutions:**
+
+* **Truncated or Malformed JSON from Phase 1 (`pdf2json`):**
+    * This is the most common cause. The LLM, during the `pdf2json` phase, may have hit its `max_output_tokens` limit while generating the structured JSON for a very long or complex PDF. This results in an incomplete (truncated) JSON file that cannot be parsed by `json.loads()` in Phase 2.
+    * **Solutions:**
+        1.  **Increase Output Token Limit for `pdf2json`:**
+            * Modify the `GENERATION_CONFIGURATION` (likely in a `config.py` or passed as parameters) for the `pdf2json` phase to increase `max_output_tokens`. This gives the LLM more room to generate the complete JSON for large documents.
+        2.  **Split the Original PDF:**
+            * For exceptionally long or complex PDFs that consistently result in truncated JSON, manually split the original PDF into smaller, more manageable documents (e.g., Part1.pdf, Part2.pdf).
+            * Run `ai-pdf2docx pdf2json` on these smaller PDF parts separately. This will generate multiple JSON files.
+            * Then, run `ai-pdf2docx json2docx` on these JSON files, which will produce multiple DOCX files. You might need to manually combine the DOCX files later if a single final document is required.
+        3.  **Attempt Manual JSON Repair (Advanced & Risky):**
+            * "If incomplete json is part of the References list, just close the json (e.g., add closing `]` and `}` syntax) (as we don’t need all of the references for this project)."
+            * This approach is for users comfortable editing JSON. If the JSON is truncated towards the end (e.g., within a list of references that are not critical for the DOCX structure), you might be able to open the `.json` file in a text editor and manually add the necessary closing brackets (`]`), braces (`}`), and commas to make it syntactically valid.
+            * **Caution:** Incorrect manual edits can further corrupt the JSON. Always work on a copy. Use an online JSON validator to check your edits before re-running the `json2docx` phase. This is best for minor fixes near the end of the file.
+
+### General Resuming Strategy for `ai-pdf2docx`
+
+* **Identify Problematic Files:** Note which PDF (for `pdf2json` errors) or JSON file (for `json2docx` errors) caused the script to report an error or skip a file.
+* **Isolate:** Move the problematic file(s) to a temporary "pending\_review" or "failed" subfolder.
+* **Re-run:**
+    * The `ai-pdf2docx.py` script (or its sub-phases) might have an `--overwrite` flag or similar logic. If **not** using overwrite, the script should ideally skip files for which the output already exists (e.g., if `output.json` exists, `pdf2json` for `input.pdf` might skip).
+    * By moving the problematic file, re-running the script on the original input directory should allow it to process any remaining files that were not processed in the previous run.
+* **Address and Retry Problematic Files:**
+    * Once the main batch is processed, focus on the isolated problematic files.
+    * Apply the specific solutions outlined above (e.g., increase token limits for `pdf2json` when retrying that PDF, split the PDF, or attempt to repair a truncated JSON for `json2docx`).
+    * After attempting a fix, move the file back to the appropriate input directory and run the relevant phase again, possibly focused only on that single file to observe its behavior more closely.
+
+By following these error handling and resuming guidelines, you can manage issues more effectively when processing batches of documents with the `ai-pdf2docx` tool.
 
 ### File Structure
 
